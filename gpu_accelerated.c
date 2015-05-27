@@ -124,9 +124,15 @@ static void get_inverse(double *in, double *out, int n) {
         fprintf(stderr, "Create kernel failed!\n");
 
     // set kernel args
-    clSetKernelArg(kernel, 0, sizeof(cl_mem), &mem_in);
-    clSetKernelArg(kernel, 1, sizeof(cl_mem), &mem_out);
-    clSetKernelArg(kernel, 3, sizeof(int), &n);
+    ret = clSetKernelArg(kernel, 0, sizeof(cl_mem), &mem_in);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "SetKernelArg #%d failed!\n", 0);
+    ret = clSetKernelArg(kernel, 1, sizeof(cl_mem), &mem_out);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "SetKernelArg #%d failed!\n", 1);
+    ret = clSetKernelArg(kernel, 3, sizeof(int), &n);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "SetKernelArg #%d failed!\n", 3);
 
     // memory init
     mem_in  = clCreateBuffer(context, CL_MEM_USE_HOST_PTR, sizeof(double)*n*n, in, NULL);
@@ -157,9 +163,12 @@ static void get_inverse(double *in, double *out, int n) {
             }
 
             // hakidashi
-            clSetKernelArg(kernel, 2, sizeof(int), &i);
-            clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
-            clEnqueueReadBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, NULL);
+            ret = clSetKernelArg(kernel, 2, sizeof(int), &i);
+            if (ret != CL_SUCCESS)
+                fprintf(stderr, "SetKernelArg #%d failed!\n", 2);
+            ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
+            if (ret != CL_SUCCESS)
+                fprintf(stderr, "Execution failed!\n");
         }
     }
 

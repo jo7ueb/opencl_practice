@@ -123,6 +123,12 @@ static void get_inverse(double *in, double *out, int n) {
     if (kernel == NULL)
         fprintf(stderr, "Create kernel failed!\n");
 
+    // memory init
+    mem_in  = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(double)*n*n, NULL, NULL);
+    mem_out = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(double)*n*n, NULL, NULL);
+    if ((mem_in == NULL) || (mem_out == NULL))
+        fprintf(stderr, "Memory alloc failed!\n");
+
     // set kernel args
     ret = clSetKernelArg(kernel, 0, sizeof(cl_mem), &mem_in);
     if (ret != CL_SUCCESS)
@@ -133,13 +139,6 @@ static void get_inverse(double *in, double *out, int n) {
     ret = clSetKernelArg(kernel, 3, sizeof(int), &n);
     if (ret != CL_SUCCESS)
         fprintf(stderr, "SetKernelArg #%d failed!\n", 3);
-
-    // memory init
-    mem_in  = clCreateBuffer(context, CL_MEM_USE_HOST_PTR, sizeof(double)*n*n, in, NULL);
-    mem_out = clCreateBuffer(context, CL_MEM_USE_HOST_PTR, sizeof(double)*n*n, out, NULL);
-
-    if ((mem_in == NULL) || (mem_out == NULL))
-        fprintf(stderr, "Memory alloc failed!\n");
 
     // calculate inverse
     for (i=0; i<n; ++i) {
@@ -162,6 +161,14 @@ static void get_inverse(double *in, double *out, int n) {
                 out[idx] *= pivot;
             }
 
+            // memory transfer
+            ret = clEnqueueWriteBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, NULL);
+            if (ret != CL_SUCCESS)
+                fprintf(stderr, "WriteBuffer(in) failed!\n");
+            ret = clEnqueueWriteBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, NULL);
+            if (ret != CL_SUCCESS)
+                fprintf(stderr, "WriteBuffer(out) failed!\n");
+
             // hakidashi
             ret = clSetKernelArg(kernel, 2, sizeof(int), &i);
             if (ret != CL_SUCCESS)
@@ -169,6 +176,14 @@ static void get_inverse(double *in, double *out, int n) {
             ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "Execution failed!\n");
+
+            // memory transfer
+            ret = clEnqueueReadBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, NULL);
+            if (ret != CL_SUCCESS)
+                fprintf(stderr, "WriteBuffer(in) failed!\n");
+            ret = clEnqueueReadBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, NULL);
+            if (ret != CL_SUCCESS)
+                fprintf(stderr, "WriteBuffer(out) failed!\n");
         }
     }
 

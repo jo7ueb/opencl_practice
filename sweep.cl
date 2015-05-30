@@ -1,7 +1,4 @@
-//#define DEBUG_MODE
-
 __kernel void sweep(__global double *in, __global double *out, int kth, int n) {
-#ifndef DEBUG_MODE
     int row = get_global_id(0);
     int k;
     double mul_num = in[(row*n) + kth];

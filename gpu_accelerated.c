@@ -6,7 +6,7 @@
 #include <sys/time.h>
 #include <CL/cl.h>
 
-#define DEBUG_MODE
+//#define DEBUG_MODE
 
 #define N 2
 #define NON_ZERO(x)  (fabs(x) > DBL_EPSILON)
@@ -81,8 +81,8 @@ static void get_inverse(double *in, double *out, int n) {
     cl_mem mem_in = NULL;
     cl_mem mem_out = NULL;
     cl_int ret;
-    size_t global_size = (n/256) + 1;
-    size_t local_size  = 256;
+    size_t global_size = n;
+    size_t local_size  = 1;
 
     // init
     generate_unit_matrix(out, n);

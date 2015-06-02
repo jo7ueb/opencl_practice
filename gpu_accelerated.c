@@ -8,7 +8,7 @@
 
 #define DEBUG_MODE
 
-#define N 2
+#define N 5
 #define NON_ZERO(x)  (fabs(x) > DBL_EPSILON)
 
 static void generate_random_matrix(double *mat, int n);

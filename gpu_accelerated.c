@@ -12,7 +12,7 @@
 #define NON_ZERO(x)  (fabs(x) > DBL_EPSILON)
 
 static void generate_random_matrix(double *mat, int n);
-static void get_inverse(double *in, double *out, int n);
+static void get_inverse(double *in, double *out, const size_t n);
 static void generate_unit_matrix(double *mat, int n);
 static int search_pivot_row(double *mat, int n, int round);
 static void swap_row(double *mat, int n, int source, int dest);
@@ -67,7 +67,7 @@ static void generate_random_matrix(double *mat, int n) {
             mat[(i*n)+j] = (double)(rand() % 100);
 }
 
-static void get_inverse(double *in, double *out, int n) {
+static void get_inverse(double *in, double *out, const size_t n) {
     int i, j, k;
     FILE *fp;
     char *source;
@@ -81,8 +81,6 @@ static void get_inverse(double *in, double *out, int n) {
     cl_mem mem_in = NULL;
     cl_mem mem_out = NULL;
     cl_int ret;
-    size_t global_size = (n/256) + 1;
-    size_t local_size  = 256;
 
     // init
     generate_unit_matrix(out, n);
@@ -173,7 +171,7 @@ static void get_inverse(double *in, double *out, int n) {
             ret = clSetKernelArg(kernel, 2, sizeof(int), &i);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "SetKernelArg #%d failed!\n", 2);
-            ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
+            ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &n, NULL, 0, NULL, NULL);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "Execution failed!\n");
 

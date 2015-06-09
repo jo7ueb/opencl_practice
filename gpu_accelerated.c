@@ -11,12 +11,21 @@
 #define N 2
 #define NON_ZERO(x)  (fabs(x) > DBL_EPSILON)
 
+typedef enum {
+    HOST2DEV_1,
+    HOST2DEV_2,
+    KERNEL_EXEC,
+    DEV2HOST_1,
+    DEV2HOST_2,
+} prof_type;
+
 static void generate_random_matrix(double *mat, int n);
 static void get_inverse(double *in, double *out, int n);
 static void generate_unit_matrix(double *mat, int n);
 static int search_pivot_row(double *mat, int n, int round);
 static void swap_row(double *mat, int n, int source, int dest);
 static void print_matrix(double *mat, int n);
+static void show_profiling_info(cl_event *event, prof_type type, int round);
 
 int main(int argc, char **argv) {
     int n, size;
@@ -91,7 +100,7 @@ static void get_inverse(double *in, double *out, int n) {
     clGetPlatformIDs(1, &platform_id, NULL);
     clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, 1, &device_id, NULL);
     context = clCreateContext(NULL, 1, &device_id, NULL, NULL, NULL);
-    command_q = clCreateCommandQueue(context, device_id, 0, NULL);
+    command_q = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, NULL);
 
     // load and load kernel
     fp = fopen("sweep.cl", "r");
@@ -144,6 +153,7 @@ static void get_inverse(double *in, double *out, int n) {
     for (i=0; i<n; ++i) {
         int row_pivot;
         double pivot;
+        cl_event event;
 
         // pivot search and swap
         row_pivot = search_pivot_row(in, n, i);
@@ -162,28 +172,35 @@ static void get_inverse(double *in, double *out, int n) {
             }
 
             // memory transfer
-            ret = clEnqueueWriteBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, NULL);
+            ret = clEnqueueWriteBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(in) failed!\n");
-            ret = clEnqueueWriteBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, NULL);
+            show_profiling_info(&event, HOST2DEV_1, i);
+
+            ret = clEnqueueWriteBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(out) failed!\n");
+            show_profiling_info(&event, HOST2DEV_2, i);
 
             // hakidashi
             ret = clSetKernelArg(kernel, 2, sizeof(int), &i);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "SetKernelArg #%d failed!\n", 2);
-            ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
+            ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "Execution failed!\n");
+            show_profiling_info(&event, KERNEL_EXEC, i);
 
             // memory transfer
-            ret = clEnqueueReadBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, NULL);
+            ret = clEnqueueReadBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(in) failed!\n");
-            ret = clEnqueueReadBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, NULL);
+            show_profiling_info(&event, DEV2HOST_1, i);
+
+            ret = clEnqueueReadBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(out) failed!\n");
+            show_profiling_info(&event, DEV2HOST_2, i);
         }
     }
 
@@ -235,4 +252,30 @@ static void print_matrix(double *mat, int n) {
         }
         printf("\n");
     }
+}
+
+static void show_profiling_info(cl_event *event, prof_type type, int round) {
+    char *type_str;
+    cl_ulong tick_qd, tick_sub, tick_start, tick_end;
+
+    // wait for event
+    clWaitForEvents(1, event);
+
+    // get timer count (assume 1ns/tick)
+    clGetEventProfilingInfo(*event, CL_PROFILING_COMMAND_QUEUED, sizeof(cl_ulong), &tick_qd, NULL);
+    clGetEventProfilingInfo(*event, CL_PROFILING_COMMAND_SUBMIT, sizeof(cl_ulong), &tick_sub, NULL);
+    clGetEventProfilingInfo(*event, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &tick_start, NULL);
+    clGetEventProfilingInfo(*event, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &tick_end, NULL);
+
+    // typestr
+    switch (type) {
+    case HOST2DEV_1:  type_str = "HOST2DEV_1"; break;
+    case HOST2DEV_2:  type_str = "HOST2DEV_2"; break;
+    case KERNEL_EXEC: type_str = "KERNEL_EXEC"; break;
+    case DEV2HOST_1:  type_str = "DEV2HOST_1"; break;
+    case DEV2HOST_2:  type_str = "DEV2HOST_2"; break;
+    default: type_str = "UNKNOWN";
+    }
+
+    printf("GOD %d,%s, %d\n", round, type_str, (int)(tick_end - tick_qd)/1000);
 }

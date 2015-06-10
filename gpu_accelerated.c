@@ -20,7 +20,8 @@
 typedef enum {
     HOST2DEV_1,
     HOST2DEV_2,
-    KERNEL_EXEC,
+    KERNEL_PIVOT,
+    KERNEL_SWEEP,
     DEV2HOST_1,
     DEV2HOST_2,
 } prof_type;
@@ -94,9 +95,11 @@ static void get_inverse(double *in, double *out, int n) {
     cl_context context = NULL;
     cl_command_queue command_q = NULL;
     cl_program program = NULL;
-    cl_kernel kernel = NULL;
+    cl_kernel kernel_pivot = NULL;
+    cl_kernel kernel_sweep = NULL;
     cl_mem mem_in = NULL;
     cl_mem mem_out = NULL;
+    cl_event event_trans;
     cl_int ret;
     size_t global_size = n;
     size_t local_size  = 1;
@@ -135,9 +138,13 @@ static void get_inverse(double *in, double *out, int n) {
         fprintf(stderr, "%s\n", log);
         free(log);
     }
-    kernel = clCreateKernel(program, "sweep", NULL);
-    if (kernel == NULL)
-        fprintf(stderr, "Create kernel failed!\n");
+
+    kernel_pivot = clCreateKernel(program, "search_swap_pivot", NULL);
+    if (kernel_pivot == NULL)
+        fprintf(stderr, "Create kernel_pivot failed!\n");
+    kernel_sweep = clCreateKernel(program, "sweep", NULL);
+    if (kernel_sweep == NULL)
+        fprintf(stderr, "Create kernel_sweep failed!\n");
 
     // memory init
     mem_in  = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(double)*n*n, NULL, NULL);
@@ -145,24 +152,60 @@ static void get_inverse(double *in, double *out, int n) {
     if ((mem_in == NULL) || (mem_out == NULL))
         fprintf(stderr, "Memory alloc failed!\n");
 
-    // set kernel args
-    ret = clSetKernelArg(kernel, 0, sizeof(cl_mem), &mem_in);
+    // kernel_pivot args
+    ret = clSetKernelArg(kernel_pivot, 0, sizeof(cl_mem), &mem_in);
     if (ret != CL_SUCCESS)
         fprintf(stderr, "SetKernelArg #%d failed!\n", 0);
-    ret = clSetKernelArg(kernel, 1, sizeof(cl_mem), &mem_out);
+    ret = clSetKernelArg(kernel_pivot, 1, sizeof(cl_mem), &mem_out);
     if (ret != CL_SUCCESS)
         fprintf(stderr, "SetKernelArg #%d failed!\n", 1);
-    ret = clSetKernelArg(kernel, 3, sizeof(int), &n);
+    ret = clSetKernelArg(kernel_pivot, 3, sizeof(int), &n);
     if (ret != CL_SUCCESS)
         fprintf(stderr, "SetKernelArg #%d failed!\n", 3);
+
+    // kernel_sweep args
+    ret = clSetKernelArg(kernel_sweep, 0, sizeof(cl_mem), &mem_in);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "SetKernelArg #%d failed!\n", 0);
+    ret = clSetKernelArg(kernel_sweep, 1, sizeof(cl_mem), &mem_out);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "SetKernelArg #%d failed!\n", 1);
+    ret = clSetKernelArg(kernel_sweep, 3, sizeof(int), &n);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "SetKernelArg #%d failed!\n", 3);
+
+    // memory transfer
+    ret = clEnqueueWriteBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event_trans);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "WriteBuffer(in) failed!\n");
+    PROF(&event_trans, HOST2DEV_1, i);
+
+    ret = clEnqueueWriteBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event_trans);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "WriteBuffer(out) failed!\n");
+    PROF(&event_trans, HOST2DEV_2, i);
 
     // calculate inverse
     for (i=0; i<n; ++i) {
         int row_pivot;
         double pivot;
-        cl_event event;
+        cl_event event_pivot;
+        cl_event event_sweep;
+
+        // set kernel args
+        ret = clSetKernelArg(kernel_pivot, 2, sizeof(int), &i);
+        if (ret != CL_SUCCESS)
+            fprintf(stderr, "SetKernelArg #%d failed!\n", 2);
+        ret = clSetKernelArg(kernel_sweep, 2, sizeof(int), &i);
+        if (ret != CL_SUCCESS)
+            fprintf(stderr, "SetKernelArg #%d failed!\n", 2);
 
         // pivot search and swap
+        ret = clEnqueueTask(command_q, kernel_pivot, 0, NULL, &event_pivot);
+        if (ret != CL_SUCCESS)
+            fprintf(stderr, "Execution pivot failed!\n");
+        PROF(&event_pivot, KERNEL_PIVOT, i);
+
         row_pivot = search_pivot_row(in, n, i);
         if (row_pivot != i) {
             swap_row(in, n, i, row_pivot);
@@ -178,45 +221,33 @@ static void get_inverse(double *in, double *out, int n) {
                 out[idx] *= pivot;
             }
 
-            // memory transfer
-            ret = clEnqueueWriteBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event);
-            if (ret != CL_SUCCESS)
-                fprintf(stderr, "WriteBuffer(in) failed!\n");
-            PROF(&event, HOST2DEV_1, i);
-
-            ret = clEnqueueWriteBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event);
-            if (ret != CL_SUCCESS)
-                fprintf(stderr, "WriteBuffer(out) failed!\n");
-            PROF(&event, HOST2DEV_2, i);
-
             // hakidashi
-            ret = clSetKernelArg(kernel, 2, sizeof(int), &i);
+            ret = clEnqueueNDRangeKernel(command_q, kernel_sweep, 1, NULL, &global_size, &local_size, 1, &event_pivot, &event_sweep);
             if (ret != CL_SUCCESS)
-                fprintf(stderr, "SetKernelArg #%d failed!\n", 2);
-            ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, &event);
-            if (ret != CL_SUCCESS)
-                fprintf(stderr, "Execution failed!\n");
-            PROF(&event, KERNEL_EXEC, i);
+                fprintf(stderr, "Execution sweep failed!\n");
+            PROF(&event_sweep, KERNEL_SWEEP, i);
 
-            // memory transfer
-            ret = clEnqueueReadBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event);
-            if (ret != CL_SUCCESS)
-                fprintf(stderr, "WriteBuffer(in) failed!\n");
-            PROF(&event, DEV2HOST_1, i);
-
-            ret = clEnqueueReadBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event);
-            if (ret != CL_SUCCESS)
-                fprintf(stderr, "WriteBuffer(out) failed!\n");
-            PROF(&event, DEV2HOST_2, i);
         }
     }
+
+    // memory transfer
+    ret = clEnqueueReadBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event_trans);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "WriteBuffer(in) failed!\n");
+    PROF(&event_trans, DEV2HOST_1, i);
+
+    ret = clEnqueueReadBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event_trans);
+    if (ret != CL_SUCCESS)
+        fprintf(stderr, "WriteBuffer(out) failed!\n");
+    PROF(&event_trans, DEV2HOST_2, i);
 
     // close
     clFlush(command_q);
     clFinish(command_q);
     clReleaseMemObject(mem_in);
     clReleaseMemObject(mem_out);
-    clReleaseKernel(kernel);
+    clReleaseKernel(kernel_sweep);
+    clReleaseKernel(kernel_pivot);
     clReleaseProgram(program);
     clReleaseCommandQueue(command_q);
     clReleaseContext(context);
@@ -279,11 +310,12 @@ static void show_profiling_info(cl_event *event, prof_type type, int round) {
 
     // typestr
     switch (type) {
-    case HOST2DEV_1:  type_str = "HOST2DEV_1"; break;
-    case HOST2DEV_2:  type_str = "HOST2DEV_2"; break;
-    case KERNEL_EXEC: type_str = "KERNEL_EXEC"; break;
-    case DEV2HOST_1:  type_str = "DEV2HOST_1"; break;
-    case DEV2HOST_2:  type_str = "DEV2HOST_2"; break;
+    case HOST2DEV_1:   type_str = "HOST2DEV_1"; break;
+    case HOST2DEV_2:   type_str = "HOST2DEV_2"; break;
+    case KERNEL_PIVOT: type_str = "KERNEL_PIVOT"; break;
+    case KERNEL_SWEEP: type_str = "KERNEL_SWEEP"; break;
+    case DEV2HOST_1:   type_str = "DEV2HOST_1"; break;
+    case DEV2HOST_2:   type_str = "DEV2HOST_2"; break;
     default: type_str = "UNKNOWN";
     }
 

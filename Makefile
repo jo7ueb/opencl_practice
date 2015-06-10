@@ -1,6 +1,15 @@
 CFLAGS=-lOpenCL
 OBJS=device_info run_cpu run_gpu
 
+# Debug/Profiling enable
+ifdef DEBUG
+CFLAGS+=-DDEBUG_MODE
+endif
+ifdef PROF
+CFLAGS+=-DPROF_MODE
+endif
+
+# rules
 all: $(OBJS)
 clean:
 	rm -f $(OBJS)

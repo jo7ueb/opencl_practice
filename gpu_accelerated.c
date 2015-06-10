@@ -6,10 +6,16 @@
 #include <sys/time.h>
 #include <CL/cl.h>
 
-//#define DEBUG_MODE
-
 #define N 2
 #define NON_ZERO(x)  (fabs(x) > DBL_EPSILON)
+
+#ifdef PROF_MODE
+#define CMDQ_PARAM CL_QUEUE_PROFILING_ENABLE
+#define PROF(event, type, round) show_profiling_info(event, type, round);
+#else
+#define CMDQ_PARAM 0
+#define PROF(event, type, round)
+#endif /* PROF_MODE */
 
 typedef enum {
     HOST2DEV_1,
@@ -25,7 +31,9 @@ static void generate_unit_matrix(double *mat, int n);
 static int search_pivot_row(double *mat, int n, int round);
 static void swap_row(double *mat, int n, int source, int dest);
 static void print_matrix(double *mat, int n);
+#ifdef PROF_MODE
 static void show_profiling_info(cl_event *event, prof_type type, int round);
+#endif /* PROF_MODE */
 
 int main(int argc, char **argv) {
     int n, size;
@@ -100,7 +108,7 @@ static void get_inverse(double *in, double *out, int n) {
     clGetPlatformIDs(1, &platform_id, NULL);
     clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, 1, &device_id, NULL);
     context = clCreateContext(NULL, 1, &device_id, NULL, NULL, NULL);
-    command_q = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, NULL);
+    command_q = clCreateCommandQueue(context, device_id, CMDQ_PARAM, NULL);
 
     // load and load kernel
     fp = fopen("sweep.cl", "r");
@@ -109,7 +117,6 @@ static void get_inverse(double *in, double *out, int n) {
     fseek(fp, 0, SEEK_SET);
     source = (char *)malloc(length_source + 1);
     fread(source, 1, length_source, fp);
-    //printf("%s\n", source);
     fclose(fp);
 
     // build kernel
@@ -175,12 +182,12 @@ static void get_inverse(double *in, double *out, int n) {
             ret = clEnqueueWriteBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(in) failed!\n");
-            show_profiling_info(&event, HOST2DEV_1, i);
+            PROF(&event, HOST2DEV_1, i);
 
             ret = clEnqueueWriteBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(out) failed!\n");
-            show_profiling_info(&event, HOST2DEV_2, i);
+            PROF(&event, HOST2DEV_2, i);
 
             // hakidashi
             ret = clSetKernelArg(kernel, 2, sizeof(int), &i);
@@ -189,18 +196,18 @@ static void get_inverse(double *in, double *out, int n) {
             ret = clEnqueueNDRangeKernel(command_q, kernel, 1, NULL, &global_size, &local_size, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "Execution failed!\n");
-            show_profiling_info(&event, KERNEL_EXEC, i);
+            PROF(&event, KERNEL_EXEC, i);
 
             // memory transfer
             ret = clEnqueueReadBuffer(command_q, mem_in, CL_TRUE, 0, sizeof(double)*n*n, in, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(in) failed!\n");
-            show_profiling_info(&event, DEV2HOST_1, i);
+            PROF(&event, DEV2HOST_1, i);
 
             ret = clEnqueueReadBuffer(command_q, mem_out, CL_TRUE, 0, sizeof(double)*n*n, out, 0, NULL, &event);
             if (ret != CL_SUCCESS)
                 fprintf(stderr, "WriteBuffer(out) failed!\n");
-            show_profiling_info(&event, DEV2HOST_2, i);
+            PROF(&event, DEV2HOST_2, i);
         }
     }
 
@@ -254,9 +261,12 @@ static void print_matrix(double *mat, int n) {
     }
 }
 
+#ifdef PROF_MODE
 static void show_profiling_info(cl_event *event, prof_type type, int round) {
     char *type_str;
     cl_ulong tick_qd, tick_sub, tick_start, tick_end;
+    cl_ulong time_total, to_submit, to_start, to_end;
+    static int flag_header = 0;
 
     // wait for event
     clWaitForEvents(1, event);
@@ -277,5 +287,15 @@ static void show_profiling_info(cl_event *event, prof_type type, int round) {
     default: type_str = "UNKNOWN";
     }
 
-    printf("GOD %d,%s, %d\n", round, type_str, (int)(tick_end - tick_qd)/1000);
+    time_total = tick_end - tick_qd;
+    to_submit  = tick_sub - tick_qd;
+    to_start   = tick_start - tick_sub;
+    to_end     = tick_end - tick_start;
+
+    if (flag_header == 0) {
+        printf("\"@\",\"round\",\"Event type\",\"Total time (ns)\",\"SUBMIT-QUEUED (ns)\",\"START-SUBMIT (ns)\",\"END-START\"\n");
+        ++flag_header;
+    }
+    printf("@,%d,%s,%lu,%lu,%lu,%lu\n", round, type_str, time_total, to_submit, to_start, to_end);
 }
+#endif /* PROF_MODE */
